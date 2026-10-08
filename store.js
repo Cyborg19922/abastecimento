@@ -111,9 +111,45 @@
   };
 
   /* --- salvar arquivo no aparelho --- */
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const mimeOf = name => /\.xlsx$/i.test(name) ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : /\.zip$/i.test(name) ? "application/zip" : "application/octet-stream";
+  // No iPhone o arquivo vai para a tela "Compartilhar" do sistema (Salvar em Arquivos, WhatsApp, e-mail…)
+  async function compartilhar(file){
+    try{ await navigator.share({ files:[file], title:file.name }); return "ok"; }
+    catch(e){ return e && e.name === "AbortError" ? "cancelado" : (e && e.name === "NotAllowedError" ? "precisa-toque" : "falhou"); }
+  }
+  function pedirToque(file){
+    // Quando o arquivo demora a ficar pronto, o iPhone exige um novo toque para abrir a tela de compartilhar
+    return new Promise(res => {
+      const ov = document.createElement("div");
+      ov.className = "modal"; ov.setAttribute("role","dialog"); ov.setAttribute("aria-modal","true");
+      ov.innerHTML = '<div class="modal-box" style="max-width:420px"><div class="modal-head"><h2>Arquivo pronto</h2></div>' +
+        '<p style="margin:0;color:var(--muted)"></p>' +
+        '<div class="form-actions"><button type="button" class="btn primary" data-a="share">Compartilhar / Salvar</button>' +
+        '<button type="button" class="btn" data-a="close">Fechar</button></div></div>';
+      ov.querySelector("p").textContent = file.name + " — toque em Compartilhar e escolha “Salvar em Arquivos”, WhatsApp ou e-mail.";
+      document.body.appendChild(ov);
+      ov.addEventListener("click", async ev => {
+        const a = ev.target.closest("[data-a]"); if(!a) return;
+        if(a.dataset.a === "share"){ const r = await compartilhar(file); if(r === "cancelado") return; ov.remove(); res(r); }
+        else { ov.remove(); res("cancelado"); }
+      });
+      ov.querySelector('[data-a="share"]').focus();
+    });
+  }
   const downloads = {
     async save({filename, data}){
       const blob = data instanceof Blob ? data : new Blob([data]);
+      if(isIOS && navigator.share && typeof File === "function"){
+        const file = new File([blob], filename, { type: blob.type || mimeOf(filename) });
+        if(!navigator.canShare || navigator.canShare({ files:[file] })){
+          let r = await compartilhar(file);
+          if(r === "precisa-toque") r = await pedirToque(file);
+          if(r === "ok") return { status:"saved" };
+          if(r === "cancelado") throw { code:"declined", message:"cancelado" };
+          // "falhou": cai para o download comum abaixo
+        }
+      }
       const u = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href = u; a.download = filename; a.rel = "noopener";
       document.body.appendChild(a); a.click(); a.remove();
